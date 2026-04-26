@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { intakeAPI, projectsAPI, resourcesAPI, usersAPI } from '../services/api';
+import { intakeAPI, projectTemplatesAPI, projectsAPI, resourcesAPI, usersAPI } from '../services/api';
 import Button from '../components/Button';
 import { DELIVERY_PHASES } from '../constants/deliveryPhases';
 
@@ -30,28 +30,47 @@ const DEFAULT_MODULES = [
   },
 ];
 
-const TEMPLATE_MODULES = {
-  'enterprise-hcm': [
-    { name: 'Discovery & blueprinting', budgetHours: 220, workstreams: [{ name: 'Inception - Discovery', budgetHours: 110, memberIds: [], tasks: ['Kickoff workshop', 'Blueprint sign-off'] }] },
-    { name: 'Core HR & org design', budgetHours: 260, workstreams: [{ name: 'Elaboration - Core HR', budgetHours: 130, memberIds: [], tasks: ['Org model setup', 'Core HR review'] }] },
-    { name: 'Payroll & compensation', budgetHours: 280, workstreams: [{ name: 'Configuration - Payroll', budgetHours: 140, memberIds: [], tasks: ['Payroll config', 'Compensation validation'] }] },
-    { name: 'Cutover & hypercare', budgetHours: 200, workstreams: [{ name: 'Transition - Cutover', budgetHours: 100, memberIds: [], tasks: ['Cutover rehearsal', 'Hypercare handoff'] }] },
-  ],
-  'smb-quickstart': [
-    { name: 'Kickoff & discovery', budgetHours: 120, workstreams: [{ name: 'Inception - Quickstart', budgetHours: 60, memberIds: [], tasks: ['Kickoff call', 'Confirm launch checklist'] }] },
-    { name: 'Core configuration', budgetHours: 160, workstreams: [{ name: 'Configuration - Core setup', budgetHours: 80, memberIds: [], tasks: ['Configure basics', 'Admin walkthrough'] }] },
-    { name: 'UAT & go-live', budgetHours: 140, workstreams: [{ name: 'Transition - Go-live', budgetHours: 70, memberIds: [], tasks: ['UAT sign-off', 'Go-live support'] }] },
-  ],
-  'payroll-scale': [
-    { name: 'Program governance & waves', budgetHours: 180, workstreams: [{ name: 'Inception - Payroll governance', budgetHours: 90, memberIds: [], tasks: ['Wave plan', 'Governance cadence'] }] },
-    { name: 'Country / entity configuration', budgetHours: 280, workstreams: [{ name: 'Configuration - Entities', budgetHours: 140, memberIds: [], tasks: ['Entity setup', 'Country validation'] }] },
-    { name: 'Parallel payroll & reconciliation', budgetHours: 300, workstreams: [{ name: 'Elaboration - Parallel payroll', budgetHours: 150, memberIds: [], tasks: ['Parallel run', 'Variance reconciliation'] }] },
-    { name: 'Retro, sign-off & hypercare', budgetHours: 180, workstreams: [{ name: 'Transition - Payroll handover', budgetHours: 90, memberIds: [], tasks: ['Final sign-off', 'Hypercare close'] }] },
-  ],
-};
+/** Phase labels used by the backend when a built-in template doesn't carry explicit workstream names. */
+const BUILT_IN_PHASE_LABELS = ['Inception', 'Elaboration', 'Configuration', 'Transition', 'Hypercare'];
 
 function cloneModules(mods) {
   return JSON.parse(JSON.stringify(mods));
+}
+
+/**
+ * Convert a project-template detail response (from GET /api/project-templates/:id)
+ * into the local module-editor shape. Works for both built-in and custom templates.
+ *
+ * - Custom modules carry an explicit `workstreams: string[]` — used verbatim.
+ * - Built-in modules carry `phaseCount` only — synthesise phased names locally so the
+ *   editor pre-populates with sensible workstream rows the user can rename.
+ */
+function moduleDetailsToEditableModules(moduleDetails) {
+  if (!Array.isArray(moduleDetails) || moduleDetails.length === 0) return null;
+  return moduleDetails.map((m) => {
+    const totalBudget = Number(m.budgetHours) || 0;
+    const explicit = Array.isArray(m.workstreams)
+      ? m.workstreams.map((w) => (typeof w === 'string' ? w : w?.name)).filter(Boolean)
+      : [];
+    const wsNames = explicit.length
+      ? explicit
+      : (() => {
+          const n = Math.max(2, Math.min(BUILT_IN_PHASE_LABELS.length, Number(m.phaseCount) || 3));
+          const short = String(m.name || '').slice(0, 28);
+          return BUILT_IN_PHASE_LABELS.slice(0, n).map((phase) => `${phase} - ${short}`);
+        })();
+    const perWs = wsNames.length > 0 ? Math.max(24, Math.round(totalBudget / wsNames.length)) : totalBudget;
+    return {
+      name: m.name || '',
+      budgetHours: totalBudget,
+      workstreams: wsNames.map((nm) => ({
+        name: nm,
+        budgetHours: perWs,
+        memberIds: [],
+        tasks: ['Plan and kick off', 'Checkpoint / sign-off'],
+      })),
+    };
+  });
 }
 
 const input = {
@@ -127,6 +146,10 @@ export default function ProjectCreatePage() {
     projectFee: '',
   });
   const [modules, setModules] = useState(() => cloneModules(DEFAULT_MODULES));
+  /** Templates catalog (built-in + custom) loaded from the API for the dropdown. */
+  const [templateCatalog, setTemplateCatalog] = useState([]);
+  const [templateCatalogError, setTemplateCatalogError] = useState('');
+  const [loadingTemplateDetail, setLoadingTemplateDetail] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -147,6 +170,25 @@ export default function ProjectCreatePage() {
       active = false;
     };
   }, [basic.startDate, basic.goLiveDate]);
+
+  useEffect(() => {
+    let active = true;
+    setTemplateCatalogError('');
+    projectTemplatesAPI
+      .getCatalog()
+      .then(({ data }) => {
+        if (!active) return;
+        setTemplateCatalog(Array.isArray(data) ? data : []);
+      })
+      .catch((e) => {
+        if (!active) return;
+        setTemplateCatalog([]);
+        setTemplateCatalogError(e?.response?.data?.message || 'Could not load templates');
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -350,9 +392,38 @@ export default function ProjectCreatePage() {
     });
   };
 
-  const chooseTemplate = (templateId) => {
+  /**
+   * Fetch the chosen template (built-in or custom) and hydrate the modules editor.
+   * Empty value resets to the default starter plan.
+   */
+  const chooseTemplate = async (templateId) => {
     setBasic((b) => ({ ...b, customerPortalTemplate: templateId }));
-    setModules(cloneModules(TEMPLATE_MODULES[templateId] || DEFAULT_MODULES));
+    if (!templateId) {
+      setModules(cloneModules(DEFAULT_MODULES));
+      return;
+    }
+    setLoadingTemplateDetail(true);
+    setError('');
+    try {
+      const { data } = await projectTemplatesAPI.getById(templateId);
+      const mapped = moduleDetailsToEditableModules(data?.moduleDetails);
+      if (mapped && mapped.length) {
+        setModules(mapped);
+      } else {
+        setModules(cloneModules(DEFAULT_MODULES));
+      }
+      if (data?.defaultTier && !basic.tier) {
+        setBasic((b) => ({ ...b, tier: data.defaultTier }));
+      }
+      if (data?.defaultDeliveryPhase && !basic.deliveryPhase) {
+        setBasic((b) => ({ ...b, deliveryPhase: data.defaultDeliveryPhase }));
+      }
+    } catch (e) {
+      setError(e?.response?.data?.message || 'Could not load that template — using starter plan instead.');
+      setModules(cloneModules(DEFAULT_MODULES));
+    } finally {
+      setLoadingTemplateDetail(false);
+    }
   };
 
   const chooseClient = (clientId) => {
@@ -582,13 +653,51 @@ export default function ProjectCreatePage() {
                   </Field>
                 </div>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 180px 180px', gap: 18 }}>
-                  <Field label="Choose a project template">
-                    <select style={input} value={basic.customerPortalTemplate} onChange={(e) => chooseTemplate(e.target.value)}>
+                  <Field label={`Choose a project template${loadingTemplateDetail ? ' (loading…)' : ''}`}>
+                    <select
+                      style={input}
+                      value={basic.customerPortalTemplate}
+                      onChange={(e) => chooseTemplate(e.target.value)}
+                      disabled={loadingTemplateDetail}
+                    >
                       <option value="">Starter implementation plan</option>
-                      <option value="enterprise-hcm">Enterprise HCM</option>
-                      <option value="smb-quickstart">SMB quick start</option>
-                      <option value="payroll-scale">Payroll at scale</option>
+                      {(() => {
+                        const systemTemplates = templateCatalog.filter((t) => !t.isCustom);
+                        const customTemplates = templateCatalog.filter((t) => t.isCustom);
+                        return (
+                          <>
+                            {systemTemplates.length > 0 ? (
+                              <optgroup label="System templates">
+                                {systemTemplates.map((t) => (
+                                  <option key={t.id} value={t.id}>
+                                    {t.name}
+                                    {t.modules ? ` · ${t.modules} modules` : ''}
+                                    {t.duration ? ` · ${t.duration}` : ''}
+                                  </option>
+                                ))}
+                              </optgroup>
+                            ) : null}
+                            {customTemplates.length > 0 ? (
+                              <optgroup label="Custom templates">
+                                {customTemplates.map((t) => (
+                                  <option key={t.id} value={t.id}>
+                                    {t.name}
+                                    {t.modules ? ` · ${t.modules} modules` : ''}
+                                    {t.duration ? ` · ${t.duration}` : ''}
+                                    {t.createdByName ? ` · by ${t.createdByName}` : ''}
+                                  </option>
+                                ))}
+                              </optgroup>
+                            ) : null}
+                          </>
+                        );
+                      })()}
                     </select>
+                    {templateCatalogError ? (
+                      <span style={{ color: '#b45309', fontSize: 11, marginTop: 4 }}>
+                        {templateCatalogError}
+                      </span>
+                    ) : null}
                   </Field>
                   <Field label="Start date">
                     <input type="date" style={input} value={basic.startDate} onChange={(e) => setBasic((b) => ({ ...b, startDate: e.target.value }))} />
