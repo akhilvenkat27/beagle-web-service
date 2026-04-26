@@ -204,6 +204,8 @@ export default function ModulePage() {
   // --- Task handlers ---
   const canCreateTask =
     user && (user.role === 'admin' || user.role === 'dh' || user.role === 'pm');
+  /** Backend POST /api/workstreams requires admin or dh — keep UI in sync. */
+  const canCreateWorkstream = user && (user.role === 'admin' || user.role === 'dh');
   const canDeleteWorkstream = user && (user.role === 'admin' || user.role === 'dh');
 
   const openAddTask = (wsId) => {
@@ -455,12 +457,14 @@ export default function ModulePage() {
             >
               {loadingFlags ? 'Scanning...' : '🚩 Flag At-Risk Tasks'}
             </button>
-            <button
-              onClick={() => { setWsName(''); setWsCustom(false); setShowWsModal(true); }}
-              className="text-sm bg-link-600 hover:bg-link-700 text-paper font-medium px-3 py-1.5 rounded-md transition-colors"
-            >
-              + Add Workstream
-            </button>
+            {canCreateWorkstream ? (
+              <button
+                onClick={() => { setWsName(''); setWsCustom(false); setShowWsModal(true); }}
+                className="text-sm bg-link-600 hover:bg-link-700 text-paper font-medium px-3 py-1.5 rounded-md transition-colors"
+              >
+                + Add Workstream
+              </button>
+            ) : null}
           </div>
         </div>
 

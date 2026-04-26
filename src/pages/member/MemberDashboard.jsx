@@ -82,7 +82,7 @@ export default function MemberDashboard() {
             </p>
           </div>
           <Link to="/execution/all-tasks" style={{ background: '#111827', color: '#fff', borderRadius: 6, padding: '8px 16px', fontSize: 13, fontWeight: 500 }}>
-            New task +
+            View all tasks →
           </Link>
         </div>
 

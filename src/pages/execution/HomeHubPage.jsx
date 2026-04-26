@@ -179,7 +179,7 @@ export default function HomeHubPage() {
               padding: '6px 12px',
             }}
           >
-            New task +
+            {user?.role === 'member' ? 'View all tasks →' : 'New task +'}
           </Link>
         </div>
 

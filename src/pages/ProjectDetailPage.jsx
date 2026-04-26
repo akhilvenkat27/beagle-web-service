@@ -66,6 +66,9 @@ export default function ProjectDetailPage() {
   /** Financial AI cards — backend: admin, pmo, dh, pm. */
   const isFinanceAi = isAdmin || user?.role === 'dh' || user?.role === 'pm' || user?.role === 'pmo';
   const canViewModuleDeliveryStatus = ['admin', 'pmo', 'dh', 'pm', 'exec'].includes(user?.role);
+  /** Backend POST /api/modules requires admin or dh — keep UI in sync. */
+  const canCreateModule = isAdmin || user?.role === 'dh';
+  const canDeleteModule = isAdmin || user?.role === 'dh';
 
   const [project, setProject] = useState(null);
   const [allProjects, setAllProjects] = useState([]);
@@ -1516,18 +1519,24 @@ export default function ProjectDetailPage() {
           Modules
           <span className="ml-2 text-sm font-normal text-ink-400">({modules.length})</span>
         </h2>
-        <button
-          onClick={() => setShowModuleModal(true)}
-          className="text-sm bg-link-600 hover:bg-link-700 text-paper font-medium px-3 py-1.5 rounded-md transition-colors"
-        >
-          + Add Module
-        </button>
+        {canCreateModule ? (
+          <button
+            onClick={() => setShowModuleModal(true)}
+            className="text-sm bg-link-600 hover:bg-link-700 text-paper font-medium px-3 py-1.5 rounded-md transition-colors"
+          >
+            + Add Module
+          </button>
+        ) : null}
       </div>
 
       {modules.length === 0 ? (
         <div className="bg-paper border border-dashed border-ink-300 rounded-lg p-12 text-center">
           <p className="text-ink-400 text-sm">No modules yet.</p>
-          <p className="text-ink-400 text-xs mt-1">Add modules like "Core HR", "Payroll", "Recruitment".</p>
+          {canCreateModule ? (
+            <p className="text-ink-400 text-xs mt-1">Add modules like "Core HR", "Payroll", "Recruitment".</p>
+          ) : (
+            <p className="text-ink-400 text-xs mt-1">A delivery head will set up modules for this project.</p>
+          )}
         </div>
       ) : (
         <div className="space-y-3">
@@ -1550,12 +1559,14 @@ export default function ProjectDetailPage() {
                   <span className="text-xs text-link-500 opacity-0 group-hover:opacity-100 transition-opacity">
                     View details →
                   </span>
-                  <button
-                    onClick={(e) => handleDeleteModule(e, mod._id)}
-                    className="text-xs text-ink-300 hover:text-risk-500 transition-colors opacity-0 group-hover:opacity-100"
-                  >
-                    Delete
-                  </button>
+                  {canDeleteModule ? (
+                    <button
+                      onClick={(e) => handleDeleteModule(e, mod._id)}
+                      className="text-xs text-ink-300 hover:text-risk-500 transition-colors opacity-0 group-hover:opacity-100"
+                    >
+                      Delete
+                    </button>
+                  ) : null}
                 </div>
               </div>
 

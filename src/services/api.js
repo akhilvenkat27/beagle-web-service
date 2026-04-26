@@ -91,9 +91,13 @@ export const projectsAPI = {
   clone: (id, data) => apiClient.post(`/projects/${id}/clone`, data),
 };
 
-/** Catalog + instantiate (modules, workstreams, starter tasks) — Rocketlane-style */
+/** Catalog + CRUD + instantiate (modules, workstreams, starter tasks) — Rocketlane-style */
 export const projectTemplatesAPI = {
   getCatalog: () => apiClient.get('/project-templates'),
+  getById: (templateId) => apiClient.get(`/project-templates/${templateId}`),
+  create: (body) => apiClient.post('/project-templates', body),
+  update: (templateId, body) => apiClient.put(`/project-templates/${templateId}`, body),
+  remove: (templateId) => apiClient.delete(`/project-templates/${templateId}`),
   instantiate: (templateId, body) => apiClient.post(`/project-templates/${templateId}/instantiate`, body),
 };
 
