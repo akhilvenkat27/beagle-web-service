@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
-import { projectsAPI, modulesAPI, aiAPI, usersAPI, financialAPI, darwinboxAPI, reviewsAPI, governanceAPI } from '../services/api';
+import { projectsAPI, modulesAPI, workstreamsAPI, aiAPI, usersAPI, financialAPI, darwinboxAPI, reviewsAPI, governanceAPI } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import Modal from '../components/Modal';
 import CommandCentre from '../components/CommandCentre';
@@ -10,8 +10,27 @@ import ClientSentimentPanel from '../components/ClientSentimentPanel';
 import RAIDLog from '../components/RAIDLog';
 import LoadingScreen from '../components/LoadingScreen';
 import ModuleStatusMatrix from '../components/ModuleStatusMatrix';
+import KanbanBoard, { KanbanColumn, KanbanCard, StatusDot } from '../components/board/KanbanBoard';
 
 const PROJECT_REGIONS = ['India', 'SEA', 'MEA', 'Americas', 'Other'];
+
+const VIEW_PREF_KEY = 'beagle.projectModulesView';
+
+function fmtShortDate(iso) {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toLocaleDateString(undefined, { day: '2-digit', month: 'short' });
+}
+
+/** Map module/workstream status string → board accent + StatusDot prop. */
+function deriveStatusTone(stats, signOffStatus) {
+  if (signOffStatus === 'Signed Off') return { dot: 'done', accent: 'success', tone: 'success' };
+  if (stats?.overdueTasks > 0) return { dot: 'blocked', accent: 'risk', tone: 'risk' };
+  if ((stats?.progress ?? 0) >= 100) return { dot: 'done', accent: 'success', tone: 'success' };
+  if ((stats?.progress ?? 0) > 0) return { dot: 'in_progress', accent: 'link', tone: 'link' };
+  return { dot: 'todo', accent: 'link', tone: 'success' };
+}
 
 function formatINR(n) {
   if (n == null || Number.isNaN(Number(n))) return '—';
@@ -75,6 +94,14 @@ export default function ProjectDetailPage() {
   const [staffUsers, setStaffUsers] = useState([]);
   const [modules, setModules] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [moduleView, setModuleView] = useState(() => {
+    try {
+      return localStorage.getItem(VIEW_PREF_KEY) || 'board';
+    } catch {
+      return 'board';
+    }
+  });
+  const [moduleWorkstreams, setModuleWorkstreams] = useState({}); // moduleId -> { loading, error, items }
   const [showModuleModal, setShowModuleModal] = useState(false);
   const [moduleForm, setModuleForm] = useState(EMPTY_MODULE);
   const [saving, setSaving] = useState(false);
@@ -152,6 +179,48 @@ export default function ProjectDetailPage() {
   }, [projectId]);
 
   useEffect(() => { fetchAll(); }, [fetchAll]);
+
+  // Persist board/list preference
+  useEffect(() => {
+    try {
+      localStorage.setItem(VIEW_PREF_KEY, moduleView);
+    } catch { /* ignore */ }
+  }, [moduleView]);
+
+  // Fetch workstreams per module when the board view is active so each
+  // column can show workstream cards (mirrors the Rocketlane phase board).
+  useEffect(() => {
+    if (moduleView !== 'board' || !modules.length) return;
+    let cancelled = false;
+    const idsToLoad = modules
+      .map((m) => m._id)
+      .filter((id) => !moduleWorkstreams[id] || moduleWorkstreams[id].stale);
+    if (idsToLoad.length === 0) return;
+
+    setModuleWorkstreams((prev) => {
+      const next = { ...prev };
+      idsToLoad.forEach((id) => { next[id] = { loading: true, error: null, items: prev[id]?.items || [] }; });
+      return next;
+    });
+
+    Promise.all(
+      idsToLoad.map((id) =>
+        workstreamsAPI
+          .getByModule(id)
+          .then((r) => ({ id, items: r.data || [], error: null }))
+          .catch((e) => ({ id, items: [], error: e?.response?.data?.message || 'Failed to load workstreams' }))
+      )
+    ).then((results) => {
+      if (cancelled) return;
+      setModuleWorkstreams((prev) => {
+        const next = { ...prev };
+        results.forEach((r) => { next[r.id] = { loading: false, error: r.error, items: r.items }; });
+        return next;
+      });
+    });
+
+    return () => { cancelled = true; };
+  }, [moduleView, modules]);
 
   useEffect(() => {
     if (!projectId || !canOpsData) {
@@ -517,7 +586,7 @@ export default function ProjectDetailPage() {
   const overallProgress = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
 
   return (
-    <div className="p-4 md:p-6 max-w-[1320px] mx-auto">
+    <div className="p-4 md:p-6 max-w-[1600px] mx-auto">
       {/* Breadcrumb */}
       <nav className="flex items-center gap-1.5 text-xs text-ink-400 mb-4">
         <Link to="/projects" className="hover:text-link-500 transition-colors">Projects</Link>
@@ -1519,14 +1588,39 @@ export default function ProjectDetailPage() {
           Modules
           <span className="ml-2 text-sm font-normal text-ink-400">({modules.length})</span>
         </h2>
-        {canCreateModule ? (
-          <button
-            onClick={() => setShowModuleModal(true)}
-            className="text-sm bg-link-600 hover:bg-link-700 text-paper font-medium px-3 py-1.5 rounded-md transition-colors"
-          >
-            + Add Module
-          </button>
-        ) : null}
+        <div className="flex items-center gap-2">
+          {/* Board / List view toggle */}
+          <div className="inline-flex rounded-md border border-ink-200 bg-paper overflow-hidden">
+            <button
+              type="button"
+              onClick={() => setModuleView('board')}
+              className={`text-xs px-2.5 py-1 transition-colors ${
+                moduleView === 'board' ? 'bg-link-600 text-paper' : 'text-ink-600 hover:bg-ink-50'
+              }`}
+              title="Board view"
+            >
+              ▦ Board
+            </button>
+            <button
+              type="button"
+              onClick={() => setModuleView('list')}
+              className={`text-xs px-2.5 py-1 border-l border-ink-200 transition-colors ${
+                moduleView === 'list' ? 'bg-link-600 text-paper' : 'text-ink-600 hover:bg-ink-50'
+              }`}
+              title="List view"
+            >
+              ☰ List
+            </button>
+          </div>
+          {canCreateModule ? (
+            <button
+              onClick={() => setShowModuleModal(true)}
+              className="text-sm bg-link-600 hover:bg-link-700 text-paper font-medium px-3 py-1.5 rounded-md transition-colors"
+            >
+              + Add Module
+            </button>
+          ) : null}
+        </div>
       </div>
 
       {modules.length === 0 ? (
@@ -1538,6 +1632,112 @@ export default function ProjectDetailPage() {
             <p className="text-ink-400 text-xs mt-1">A delivery head will set up modules for this project.</p>
           )}
         </div>
+      ) : moduleView === 'board' ? (
+        /* Rocketlane-style horizontal board: each module is a column,
+           workstreams within the module are the cards. */
+        <KanbanBoard className="-mx-1">
+          {modules.map((mod) => {
+            const tone = deriveStatusTone(mod.stats);
+            const wsState = moduleWorkstreams[mod._id] || { loading: false, error: null, items: [] };
+            const wsItems = wsState.items || [];
+            const burnTone =
+              mod.stats.burnPercent > 90 ? 'risk' : mod.stats.burnPercent > 70 ? 'caution' : 'link';
+            return (
+              <KanbanColumn
+                key={mod._id}
+                icon={<StatusDot status={tone.dot} />}
+                accent={tone.accent}
+                title={mod.name}
+                onTitleClick={() => navigate(`/projects/${projectId}/modules/${mod._id}`)}
+                subtitle={
+                  <span className="flex items-center gap-2 flex-wrap">
+                    <span className="bg-ink-50 text-ink-600 px-1.5 py-0.5 rounded text-[10px] font-medium">
+                      {mod.stats.workstreamCount} ws · {mod.stats.totalTasks} tasks
+                    </span>
+                    <span className="text-ink-500">
+                      {mod.stats.loggedHours}h / {mod.budgetHours}h
+                    </span>
+                  </span>
+                }
+                progress={mod.stats.progress}
+                progressTone={tone.tone === 'risk' ? 'risk' : 'success'}
+                actions={
+                  canDeleteModule ? (
+                    <button
+                      onClick={(e) => handleDeleteModule(e, mod._id)}
+                      className="text-[11px] text-ink-300 hover:text-risk-500 px-1"
+                      title="Delete module"
+                    >
+                      ✕
+                    </button>
+                  ) : null
+                }
+                emptyMessage={wsState.loading ? 'Loading workstreams…' : wsState.error || 'No workstreams yet'}
+                footer={
+                  <div className="flex items-center justify-between text-[10px] text-ink-400">
+                    <span>
+                      Burn{' '}
+                      <strong className={burnTone === 'risk' ? 'text-risk-600' : burnTone === 'caution' ? 'text-caution-700' : 'text-ink-700'}>
+                        {mod.stats.burnPercent}%
+                      </strong>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => navigate(`/projects/${projectId}/modules/${mod._id}`)}
+                      className="text-link-600 hover:underline"
+                    >
+                      Open →
+                    </button>
+                  </div>
+                }
+              >
+                {wsItems.map((ws) => {
+                  const wsDone = (ws.tasks || []).filter((t) => t.status === 'Done').length;
+                  const wsTotal = (ws.tasks || []).length;
+                  const wsProgress = wsTotal ? Math.round((wsDone / wsTotal) * 100) : 0;
+                  const wsTone = deriveStatusTone(
+                    { progress: wsProgress, overdueTasks: 0 },
+                    ws.signOffStatus
+                  );
+                  const dateRange = [fmtShortDate(ws.actualStartDate || ws.baselinePlannedStartDate), fmtShortDate(ws.actualEndDate || ws.baselinePlannedEndDate)]
+                    .filter(Boolean)
+                    .join(' → ');
+                  return (
+                    <KanbanCard
+                      key={ws._id}
+                      leadingIcon={<StatusDot status={wsTone.dot} size="sm" />}
+                      title={ws.name}
+                      subtitle={dateRange || null}
+                      tags={[
+                        wsTotal > 0 ? (
+                          <span key="prog" className="text-[10px] bg-ink-50 text-ink-600 px-1.5 py-0.5 rounded">
+                            {wsDone}/{wsTotal} done
+                          </span>
+                        ) : null,
+                        ws.signOffStatus === 'Signed Off' ? (
+                          <span key="signed" className="text-[10px] bg-success-50 text-success-700 px-1.5 py-0.5 rounded">✓ signed</span>
+                        ) : ws.signOffStatus === 'Requested' ? (
+                          <span key="req" className="text-[10px] bg-caution-50 text-caution-700 px-1.5 py-0.5 rounded">sign-off requested</span>
+                        ) : null,
+                      ].filter(Boolean)}
+                      footer={
+                        wsTotal > 0 ? (
+                          <div className="h-1 bg-ink-100 rounded-full overflow-hidden">
+                            <div
+                              className={`h-full rounded-full ${wsProgress >= 100 ? 'bg-success-500' : wsProgress > 0 ? 'bg-link-500' : 'bg-ink-200'}`}
+                              style={{ width: `${wsProgress}%` }}
+                            />
+                          </div>
+                        ) : null
+                      }
+                      onClick={() => navigate(`/projects/${projectId}/modules/${mod._id}`)}
+                    />
+                  );
+                })}
+              </KanbanColumn>
+            );
+          })}
+        </KanbanBoard>
       ) : (
         <div className="space-y-3">
           {modules.map((mod) => (

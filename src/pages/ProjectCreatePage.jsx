@@ -1,7 +1,9 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { intakeAPI, projectTemplatesAPI, projectsAPI, resourcesAPI, usersAPI } from '../services/api';
+import Avatar from '../components/Avatar';
 import Button from '../components/Button';
+import MemberPicker from '../components/MemberPicker';
 import { DELIVERY_PHASES } from '../constants/deliveryPhases';
 
 const STEPS = ['Basic info', 'Project team', 'Customer team', 'Project fields'];
@@ -275,6 +277,48 @@ export default function ProjectCreatePage() {
   }, [availableMembers, team.memberIds]);
 
   const selectedOwner = availableMembers.find((m) => String(m.userId) === String(team.projectOwnerId));
+
+  // Invite popover state.
+  const [inviteOpen, setInviteOpen] = useState(false);
+  const [inviteSearch, setInviteSearch] = useState('');
+  const inviteWrapperRef = useRef(null);
+  const inviteSearchRef = useRef(null);
+
+  useEffect(() => {
+    if (!inviteOpen) {
+      setInviteSearch('');
+      return undefined;
+    }
+    const handler = (e) => {
+      if (!inviteWrapperRef.current) return;
+      if (!inviteWrapperRef.current.contains(e.target)) setInviteOpen(false);
+    };
+    document.addEventListener('mousedown', handler);
+    // Focus search after the popover mounts.
+    setTimeout(() => inviteSearchRef.current?.focus(), 0);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [inviteOpen]);
+
+  const filteredInviteCandidates = useMemo(() => {
+    const q = inviteSearch.trim().toLowerCase();
+    const list = q
+      ? availableMembers.filter((m) => {
+          const name = (m.name || '').toLowerCase();
+          const role = (m.role || '').toLowerCase();
+          const email = (m.email || '').toLowerCase();
+          return name.includes(q) || role.includes(q) || email.includes(q);
+        })
+      : availableMembers;
+    return list;
+  }, [availableMembers, inviteSearch]);
+
+  // Subtitle helper for the owner picker.
+  const ownerSubtitle = (m) => {
+    const role = m?.role || '';
+    const free = Math.round(m?.freeHours || 0);
+    const cap = Math.round(m?.capacityHours || 0);
+    return `${role}${cap ? ` · ${free}h free of ${cap}h` : ` · ${free}h free`}`;
+  };
   const selectedClient = clients.find((c) => String(c._id) === String(basic.clientUserId));
 
   const setModule = (idx, patch) => {
@@ -737,27 +781,214 @@ export default function ProjectCreatePage() {
             {step === 1 && (
               <div style={{ maxWidth: 820, display: 'grid', gap: 20 }}>
                 <Field label="Project owner" required>
-                  <select style={input} value={team.projectOwnerId} onChange={(e) => setTeam((t) => ({ ...t, projectOwnerId: e.target.value }))}>
-                    <option value="">Select available owner</option>
-                    {availableMembers.map((m) => (
-                      <option key={m.userId} value={m.userId}>{m.name} · {m.role} · {Math.round(m.freeHours || 0)}h free</option>
-                    ))}
-                  </select>
+                  <MemberPicker
+                    value={{
+                      userId: team.projectOwnerId,
+                      label: selectedOwner
+                        ? `${selectedOwner.name} · ${selectedOwner.role} · ${Math.round(selectedOwner.freeHours || 0)}h free`
+                        : '',
+                    }}
+                    options={availableMembers}
+                    getOptionId={(m) => m.userId}
+                    getOptionName={(m) => m.name}
+                    getOptionSubtitle={ownerSubtitle}
+                    placeholder="Search and select an available owner"
+                    allowFreeText={false}
+                    width={360}
+                    onChange={({ user }) => {
+                      if (user) {
+                        setTeam((t) => ({ ...t, projectOwnerId: user.userId }));
+                      }
+                    }}
+                    onClear={() => setTeam((t) => ({ ...t, projectOwnerId: '' }))}
+                  />
                 </Field>
                 <div>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: '#111827', marginBottom: 8 }}>Invite available team members</div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: '#111827', marginBottom: 8 }}>
+                    Invite team members
+                    {selectedTeam.length > 0 ? (
+                      <span style={{ marginLeft: 8, fontWeight: 500, color: '#6b7280', fontSize: 12 }}>
+                        ({selectedTeam.length} invited)
+                      </span>
+                    ) : null}
+                  </div>
                   {availabilityError ? <p style={{ color: '#b91c1c', fontSize: 12 }}>{availabilityError}</p> : null}
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 10 }}>
-                    {availableMembers.map((m) => {
-                      const selected = team.memberIds.map(String).includes(String(m.userId));
-                      return (
-                        <button key={m.userId} type="button" onClick={() => toggleMember(m.userId)} style={{ border: selected ? '1px solid #7c3aed' : '1px solid #e5e7eb', background: selected ? '#f5f3ff' : '#fff', borderRadius: 8, padding: 10, textAlign: 'left', cursor: 'pointer' }}>
-                          <strong style={{ display: 'block', color: '#111827', fontSize: 13 }}>{m.name}</strong>
-                          <span style={{ color: '#6b7280', fontSize: 12 }}>{m.role} · {Math.round(m.freeHours || 0)}h free of {Math.round(m.capacityHours || 0)}h</span>
-                        </button>
-                      );
-                    })}
-                    {!availableMembers.length ? <div style={{ color: '#9ca3af', fontSize: 13 }}>No non-busy members found for this date range.</div> : null}
+
+                  {selectedTeam.length > 0 ? (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 10 }}>
+                      {selectedTeam.map((m) => {
+                        const isOwner = String(team.projectOwnerId) === String(m.userId);
+                        return (
+                          <span
+                            key={m.userId}
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 8,
+                              border: '1px solid #ddd6fe',
+                              background: '#f5f3ff',
+                              borderRadius: 999,
+                              padding: '4px 6px 4px 4px',
+                              maxWidth: 320,
+                            }}
+                          >
+                            <Avatar name={m.name} size={22} />
+                            <span style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+                              <strong style={{ color: '#111827', fontSize: 12, lineHeight: 1.2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                {m.name}
+                                {isOwner ? <span style={{ marginLeft: 6, fontSize: 10, color: '#5b21b6', background: '#ede9fe', borderRadius: 999, padding: '1px 6px' }}>Owner</span> : null}
+                              </strong>
+                              <span style={{ color: '#6b7280', fontSize: 11, lineHeight: 1.2 }}>
+                                {m.role} · {Math.round(m.freeHours || 0)}h free
+                              </span>
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => toggleMember(m.userId)}
+                              aria-label={`Remove ${m.name}`}
+                              style={{
+                                background: 'transparent',
+                                border: 0,
+                                color: '#6b7280',
+                                cursor: 'pointer',
+                                fontSize: 14,
+                                lineHeight: 1,
+                                padding: 4,
+                                marginLeft: 2,
+                              }}
+                            >
+                              ×
+                            </button>
+                          </span>
+                        );
+                      })}
+                    </div>
+                  ) : null}
+
+                  <div ref={inviteWrapperRef} style={{ position: 'relative', display: 'inline-block' }}>
+                    <button
+                      type="button"
+                      onClick={() => setInviteOpen((v) => !v)}
+                      disabled={!availableMembers.length}
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 6,
+                        border: '1px dashed #c4b5fd',
+                        background: '#fff',
+                        color: '#5b21b6',
+                        borderRadius: 8,
+                        padding: '8px 14px',
+                        fontSize: 13,
+                        fontWeight: 600,
+                        cursor: availableMembers.length ? 'pointer' : 'not-allowed',
+                        opacity: availableMembers.length ? 1 : 0.6,
+                      }}
+                    >
+                      <span style={{ fontSize: 14, lineHeight: 1 }}>+</span>
+                      <span>Invite team member</span>
+                    </button>
+
+                    {inviteOpen ? (
+                      <div
+                        style={{
+                          position: 'absolute',
+                          top: 'calc(100% + 6px)',
+                          left: 0,
+                          width: 380,
+                          maxWidth: '90vw',
+                          background: '#fff',
+                          border: '1px solid #e5e7eb',
+                          borderRadius: 8,
+                          boxShadow: '0 10px 25px -10px rgba(15,23,42,0.25)',
+                          zIndex: 30,
+                        }}
+                      >
+                        <div style={{ padding: 8, borderBottom: '1px solid #f1f5f9' }}>
+                          <input
+                            ref={inviteSearchRef}
+                            type="text"
+                            placeholder="Search by name, role, or email"
+                            value={inviteSearch}
+                            onChange={(e) => setInviteSearch(e.target.value)}
+                            style={input}
+                          />
+                        </div>
+                        <div style={{ maxHeight: 280, overflowY: 'auto', padding: '4px 0' }}>
+                          {!availableMembers.length ? (
+                            <div style={{ padding: '12px', color: '#9ca3af', fontSize: 13 }}>
+                              No non-busy members found for this date range.
+                            </div>
+                          ) : !filteredInviteCandidates.length ? (
+                            <div style={{ padding: '12px', color: '#9ca3af', fontSize: 13 }}>
+                              No members match “{inviteSearch}”.
+                            </div>
+                          ) : (
+                            filteredInviteCandidates.map((m) => {
+                              const selected = team.memberIds.map(String).includes(String(m.userId));
+                              const isOwner = String(team.projectOwnerId) === String(m.userId);
+                              return (
+                                <button
+                                  key={m.userId}
+                                  type="button"
+                                  onClick={() => toggleMember(m.userId)}
+                                  style={{
+                                    width: '100%',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: 10,
+                                    padding: '8px 12px',
+                                    background: selected ? '#f5f3ff' : 'transparent',
+                                    border: 0,
+                                    borderLeft: selected ? '3px solid #7c3aed' : '3px solid transparent',
+                                    cursor: 'pointer',
+                                    textAlign: 'left',
+                                  }}
+                                  onMouseEnter={(e) => {
+                                    if (!selected) e.currentTarget.style.background = '#f9fafb';
+                                  }}
+                                  onMouseLeave={(e) => {
+                                    if (!selected) e.currentTarget.style.background = 'transparent';
+                                  }}
+                                >
+                                  <Avatar name={m.name} size={28} />
+                                  <span style={{ flex: 1, minWidth: 0 }}>
+                                    <strong style={{ display: 'block', color: '#111827', fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                      {m.name}
+                                      {isOwner ? <span style={{ marginLeft: 6, fontSize: 10, color: '#5b21b6', background: '#ede9fe', borderRadius: 999, padding: '1px 6px' }}>Owner</span> : null}
+                                    </strong>
+                                    <span style={{ display: 'block', color: '#6b7280', fontSize: 11 }}>
+                                      {m.role} · {Math.round(m.freeHours || 0)}h free of {Math.round(m.capacityHours || 0)}h
+                                    </span>
+                                  </span>
+                                  <span style={{ fontSize: 11, fontWeight: 600, color: selected ? '#5b21b6' : '#6b7280', flexShrink: 0 }}>
+                                    {selected ? '✓ Added' : '+ Add'}
+                                  </span>
+                                </button>
+                              );
+                            })
+                          )}
+                        </div>
+                        <div style={{ borderTop: '1px solid #f1f5f9', padding: 8, display: 'flex', justifyContent: 'flex-end' }}>
+                          <button
+                            type="button"
+                            onClick={() => setInviteOpen(false)}
+                            style={{
+                              background: '#7c3aed',
+                              color: '#fff',
+                              border: 0,
+                              borderRadius: 6,
+                              padding: '6px 12px',
+                              fontSize: 12,
+                              fontWeight: 600,
+                              cursor: 'pointer',
+                            }}
+                          >
+                            Done
+                          </button>
+                        </div>
+                      </div>
+                    ) : null}
                   </div>
                 </div>
               </div>

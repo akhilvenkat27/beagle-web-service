@@ -10,87 +10,10 @@ import { PROJECT_TEMPLATES_FALLBACK } from '../../constants/projectTemplatesCata
 
 const AUTHOR_ROLES = new Set(['admin', 'pmo']);
 
-const STARTER_MODULES_TEXT = [
-  'Discovery & planning | 160 | Kickoff, Requirements, Sign-off',
-  'Core configuration | 260 | Setup, Validation, UAT',
-  'Go-live support | 120 | Cutover, Hypercare',
-].join('\n');
-
-const EMPTY_AUTHOR_FORM = () => ({
-  name: '',
-  desc: '',
-  durationLabel: '',
-  modulesText: STARTER_MODULES_TEXT,
-});
-
 function defaultGoLiveISO() {
   const d = new Date();
   d.setDate(d.getDate() + 90);
   return d.toISOString().slice(0, 10);
-}
-
-/**
- * Parse the textarea contents into a list of modules.
- * Each line: "Module name | budget hours | workstream 1, workstream 2".
- * Returns { modules, errors } — errors is an array of human-readable strings.
- */
-function parseModulesText(text) {
-  const errors = [];
-  const modules = [];
-  const lines = String(text || '')
-    .split(/\r?\n/)
-    .map((l) => l.trim())
-    .filter((l) => l.length > 0 && !l.startsWith('#'));
-
-  if (lines.length === 0) {
-    errors.push('Add at least one module line.');
-    return { modules, errors };
-  }
-
-  lines.forEach((raw, idx) => {
-    const parts = raw.split('|').map((p) => p.trim());
-    const lineLabel = `Line ${idx + 1}`;
-    if (parts.length < 2) {
-      errors.push(`${lineLabel}: expected "name | hours | workstreams" (got "${raw}")`);
-      return;
-    }
-    const [name, hoursStr, wsStr = ''] = parts;
-    if (!name || name.length < 2) {
-      errors.push(`${lineLabel}: module name is required`);
-      return;
-    }
-    const hours = Number(hoursStr);
-    if (!Number.isFinite(hours) || hours < 0) {
-      errors.push(`${lineLabel}: budget hours must be a non-negative number`);
-      return;
-    }
-    const workstreams = wsStr
-      .split(',')
-      .map((w) => w.trim())
-      .filter((w) => w.length > 0);
-    modules.push({
-      name,
-      budgetHours: hours,
-      workstreams,
-      // server falls back to phaseCount when workstreams is empty
-      phaseCount: workstreams.length || 3,
-    });
-  });
-
-  return { modules, errors };
-}
-
-/** Render a module list back into the textarea-friendly pipe format. */
-function modulesToText(moduleDetails) {
-  if (!Array.isArray(moduleDetails) || moduleDetails.length === 0) return STARTER_MODULES_TEXT;
-  return moduleDetails
-    .map((m) => {
-      const ws = Array.isArray(m.workstreams) && m.workstreams.length > 0
-        ? m.workstreams.join(', ')
-        : '';
-      return [m.name || '', m.budgetHours ?? '', ws].join(' | ').replace(/\s+\|\s+$/, '');
-    })
-    .join('\n');
 }
 
 export default function ProjectTemplatesPage() {
@@ -115,13 +38,6 @@ export default function ProjectTemplatesPage() {
   });
   const [useSubmitting, setUseSubmitting] = useState(false);
   const [useFormError, setUseFormError] = useState('');
-
-  // Author / edit modal state
-  const [authorModal, setAuthorModal] = useState(null); // { mode: 'create' | 'edit', templateId? }
-  const [authorForm, setAuthorForm] = useState(EMPTY_AUTHOR_FORM());
-  const [authorSubmitting, setAuthorSubmitting] = useState(false);
-  const [authorError, setAuthorError] = useState('');
-  const [authorLoading, setAuthorLoading] = useState(false);
 
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [deleting, setDeleting] = useState(false);
@@ -235,84 +151,11 @@ export default function ProjectTemplatesPage() {
   /* -------------------------- Author / edit flow -------------------------- */
 
   const openCreate = () => {
-    setAuthorError('');
-    setAuthorForm(EMPTY_AUTHOR_FORM());
-    setAuthorModal({ mode: 'create' });
+    navigate('/execution/templates/new');
   };
 
-  const openEdit = async (templateId) => {
-    setAuthorError('');
-    setAuthorModal({ mode: 'edit', templateId });
-    setAuthorLoading(true);
-    try {
-      const { data } = await projectTemplatesAPI.getById(templateId);
-      setAuthorForm({
-        name: data?.name || '',
-        desc: data?.desc || '',
-        durationLabel: data?.duration || '',
-        modulesText: modulesToText(data?.moduleDetails),
-      });
-    } catch (e) {
-      setAuthorError(e?.response?.data?.message || e?.message || 'Could not load template');
-    } finally {
-      setAuthorLoading(false);
-    }
-  };
-
-  const closeAuthor = () => {
-    if (authorSubmitting) return;
-    setAuthorModal(null);
-    setAuthorError('');
-  };
-
-  const livePreview = useMemo(() => parseModulesText(authorForm.modulesText), [authorForm.modulesText]);
-
-  const submitAuthor = async () => {
-    setAuthorError('');
-    const name = authorForm.name.trim();
-    if (name.length < 2) {
-      setAuthorError('Template name must be at least 2 characters.');
-      return;
-    }
-
-    const { modules, errors } = parseModulesText(authorForm.modulesText);
-    if (errors.length) {
-      setAuthorError(errors.join(' '));
-      return;
-    }
-    if (!modules.length) {
-      setAuthorError('Add at least one module line.');
-      return;
-    }
-
-    const payload = {
-      name,
-      desc: authorForm.desc.trim(),
-      durationLabel: authorForm.durationLabel.trim(),
-      defaultTier: 'Tier 2',
-      defaultDeliveryPhase: 'Sales Handover',
-      modules,
-    };
-
-    setAuthorSubmitting(true);
-    try {
-      if (authorModal?.mode === 'edit' && authorModal.templateId) {
-        await projectTemplatesAPI.update(authorModal.templateId, payload);
-      } else {
-        await projectTemplatesAPI.create(payload);
-      }
-      await loadCatalog();
-      setAuthorModal(null);
-    } catch (e) {
-      const errs = e?.response?.data?.errors;
-      if (Array.isArray(errs) && errs.length) {
-        setAuthorError(errs.join(' '));
-      } else {
-        setAuthorError(e?.response?.data?.message || e?.message || 'Could not save template');
-      }
-    } finally {
-      setAuthorSubmitting(false);
-    }
+  const openEdit = (templateId) => {
+    navigate(`/execution/templates/${encodeURIComponent(templateId)}/edit`);
   };
 
   /* -------------------------- Delete flow -------------------------- */
@@ -523,118 +366,6 @@ export default function ProjectTemplatesPage() {
                 </Button>
               </div>
             </div>
-          </Modal>
-        ) : null}
-
-        {/* Author / edit modal — textarea pipe format */}
-        {authorModal ? (
-          <Modal
-            size="lg"
-            title={authorModal.mode === 'edit' ? 'Edit project template' : 'Create project template'}
-            onClose={closeAuthor}
-          >
-            {authorLoading ? (
-              <p className="text-sm text-ink-500 m-0">Loading template…</p>
-            ) : (
-              <div className="space-y-3">
-                <p className="text-xs text-ink-500 m-0 leading-relaxed">
-                  Save a reusable delivery structure. Each module line uses:{' '}
-                  <span className="font-mono text-ink-700">Module name | budget hours | workstream 1, workstream 2</span>.
-                </p>
-
-                <label className="block text-xs font-medium text-ink-600">
-                  Template name
-                  <input
-                    className="mt-1 w-full border border-ink-200 rounded-md px-2.5 py-1.5 text-sm"
-                    value={authorForm.name}
-                    onChange={(e) => setAuthorForm((f) => ({ ...f, name: e.target.value }))}
-                    disabled={authorSubmitting}
-                    placeholder="Enterprise rollout"
-                  />
-                </label>
-
-                <label className="block text-xs font-medium text-ink-600">
-                  Description
-                  <textarea
-                    rows={2}
-                    className="mt-1 w-full border border-ink-200 rounded-md px-2.5 py-1.5 text-sm"
-                    value={authorForm.desc}
-                    onChange={(e) => setAuthorForm((f) => ({ ...f, desc: e.target.value }))}
-                    disabled={authorSubmitting}
-                    placeholder="Reusable module, workstream, and task playbook"
-                  />
-                </label>
-
-                <label className="block text-xs font-medium text-ink-600">
-                  Duration label
-                  <input
-                    className="mt-1 w-full border border-ink-200 rounded-md px-2.5 py-1.5 text-sm"
-                    value={authorForm.durationLabel}
-                    onChange={(e) => setAuthorForm((f) => ({ ...f, durationLabel: e.target.value }))}
-                    disabled={authorSubmitting}
-                    placeholder="8-12 wks"
-                  />
-                </label>
-
-                <label className="block text-xs font-medium text-ink-600">
-                  Modules and workstreams
-                  <textarea
-                    rows={6}
-                    spellCheck={false}
-                    className="mt-1 w-full border border-ink-200 rounded-md px-2.5 py-1.5 text-[13px] font-mono leading-relaxed"
-                    value={authorForm.modulesText}
-                    onChange={(e) => setAuthorForm((f) => ({ ...f, modulesText: e.target.value }))}
-                    disabled={authorSubmitting}
-                    placeholder={STARTER_MODULES_TEXT}
-                  />
-                </label>
-
-                <div className="flex items-center justify-between text-[11px] text-ink-500">
-                  <span>
-                    {livePreview.errors.length === 0 ? (
-                      <>
-                        <strong className="font-medium text-ink-700">{livePreview.modules.length}</strong> module
-                        {livePreview.modules.length === 1 ? '' : 's'},{' '}
-                        <strong className="font-medium text-ink-700">
-                          {livePreview.modules.reduce((sum, m) => sum + (m.workstreams?.length || 0), 0)}
-                        </strong>{' '}
-                        workstreams parsed
-                      </>
-                    ) : (
-                      <span className="text-amber-700">{livePreview.errors[0]}</span>
-                    )}
-                  </span>
-                  <button
-                    type="button"
-                    className="text-ink-400 hover:text-ink-700 underline"
-                    onClick={() => setAuthorForm((f) => ({ ...f, modulesText: STARTER_MODULES_TEXT }))}
-                    disabled={authorSubmitting}
-                  >
-                    Reset to example
-                  </button>
-                </div>
-
-                <p className="text-[11px] text-ink-500 m-0 leading-relaxed">
-                  Starter tasks are generated for each workstream and will be dated around the selected go-live date when
-                  a project is created from this template.
-                </p>
-
-                {authorError ? <p className="text-xs text-red-600 m-0">{authorError}</p> : null}
-
-                <div className="flex justify-end gap-2 pt-1">
-                  <Button variant="ghost" type="button" disabled={authorSubmitting} onClick={closeAuthor}>
-                    Cancel
-                  </Button>
-                  <Button type="button" disabled={authorSubmitting} onClick={submitAuthor}>
-                    {authorSubmitting
-                      ? 'Saving…'
-                      : authorModal.mode === 'edit'
-                        ? 'Save changes'
-                        : 'Save template'}
-                  </Button>
-                </div>
-              </div>
-            )}
           </Modal>
         ) : null}
 

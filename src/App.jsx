@@ -30,6 +30,7 @@ import AllTasksPage from './pages/execution/AllTasksPage';
 import ReportsHubPage from './pages/execution/ReportsHubPage';
 import ResourcePlanningPage from './pages/execution/ResourcePlanningPage';
 import ProjectTemplatesPage from './pages/execution/ProjectTemplatesPage';
+import TemplateEditorPage from './pages/execution/TemplateEditorPage';
 import NotificationSettingsPage from './pages/execution/NotificationSettingsPage';
 import LoadingScreen from './components/LoadingScreen';
 
@@ -168,6 +169,22 @@ export default function App() {
               element={
                 <ProtectedRoute allowedRoles={['admin', 'pmo', 'dh', 'pm', 'exec']}>
                   <ProjectTemplatesPage />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/execution/templates/new"
+              element={
+                <ProtectedRoute allowedRoles={['admin', 'pmo']}>
+                  <TemplateEditorPage />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/execution/templates/:templateId/edit"
+              element={
+                <ProtectedRoute allowedRoles={['admin', 'pmo']}>
+                  <TemplateEditorPage />
                 </ProtectedRoute>
               }
             />

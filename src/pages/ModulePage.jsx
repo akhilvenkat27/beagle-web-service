@@ -3,8 +3,25 @@ import { useParams, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { projectsAPI, modulesAPI, workstreamsAPI, tasksAPI, aiAPI, usersAPI, financialAPI } from '../services/api';
 import Modal from '../components/Modal';
+import KanbanBoard, { KanbanColumn, KanbanCard, StatusDot } from '../components/board/KanbanBoard';
 
 const WS_PRESETS = ['Configuration', 'Data Migration', 'UAT', 'Training', 'Integration'];
+
+const TASK_VIEW_PREF_KEY = 'beagle.moduleTaskView';
+
+/** Map a task's lifecycle status to the StatusDot variant. */
+function taskStatusDot(status) {
+  if (status === 'Done') return 'done';
+  if (status === 'In Progress') return 'in_progress';
+  return 'todo';
+}
+
+function fmtBoardDate(d) {
+  if (!d) return null;
+  const dd = new Date(d);
+  if (Number.isNaN(dd.getTime())) return null;
+  return dd.toLocaleDateString(undefined, { day: '2-digit', month: 'short' });
+}
 
 const EMPTY_TASK = {
   title: '',
@@ -80,6 +97,20 @@ export default function ModulePage() {
   const [wsDateDrafts, setWsDateDrafts] = useState({});
   const [projectFinancial, setProjectFinancial] = useState(null);
   const [dataTick, setDataTick] = useState(0);
+
+  const [taskView, setTaskView] = useState(() => {
+    try {
+      return localStorage.getItem(TASK_VIEW_PREF_KEY) || 'board';
+    } catch {
+      return 'board';
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(TASK_VIEW_PREF_KEY, taskView);
+    } catch { /* ignore */ }
+  }, [taskView]);
 
   const userLeadsProjectAsPm =
     user?.role === 'pm' &&
@@ -430,7 +461,7 @@ export default function ModulePage() {
   if (loading) return <div className="p-6 text-sm text-ink-400">Loading...</div>;
 
   return (
-    <div className="p-6 max-w-5xl mx-auto pb-28">
+    <div className="p-4 md:p-6 max-w-[1600px] mx-auto pb-28">
       {/* Breadcrumb */}
       <nav className="flex items-center gap-1.5 text-sm text-ink-400 mb-5">
         <Link to="/projects" className="hover:text-link-500 transition-colors">Projects</Link>
@@ -449,7 +480,30 @@ export default function ModulePage() {
             <h1 className="text-xl font-bold text-ink-900">{module?.name}</h1>
             <p className="text-sm text-ink-400 mt-0.5">{project?.clientName}</p>
           </div>
-          <div className="flex gap-2">
+          <div className="flex gap-2 items-center">
+            {/* Board / List view toggle */}
+            <div className="inline-flex rounded-md border border-ink-200 bg-paper overflow-hidden">
+              <button
+                type="button"
+                onClick={() => setTaskView('board')}
+                className={`text-xs px-2.5 py-1 transition-colors ${
+                  taskView === 'board' ? 'bg-link-600 text-paper' : 'text-ink-600 hover:bg-ink-50'
+                }`}
+                title="Board view"
+              >
+                ▦ Board
+              </button>
+              <button
+                type="button"
+                onClick={() => setTaskView('list')}
+                className={`text-xs px-2.5 py-1 border-l border-ink-200 transition-colors ${
+                  taskView === 'list' ? 'bg-link-600 text-paper' : 'text-ink-600 hover:bg-ink-50'
+                }`}
+                title="List view"
+              >
+                ☰ List
+              </button>
+            </div>
             <button
               onClick={handleLoadTaskFlags}
               disabled={loadingFlags}
@@ -549,6 +603,294 @@ export default function ModulePage() {
         <div className="border border-dashed border-ink-300 rounded-lg p-12 text-center text-ink-400 text-sm">
           No workstreams yet. Add one to start tracking tasks.
         </div>
+      ) : taskView === 'board' ? (
+        /* Rocketlane-style horizontal board: each workstream is a column,
+           tasks within the workstream are the cards. List view (toggle above)
+           still has the full inline-edit table for power users. */
+        <KanbanBoard className="-mx-1">
+          {workstreams.map((ws) => {
+            const overdueCount = ws.tasks.filter(isOverdue).length;
+            const doneCount = ws.tasks.filter((t) => t.status === 'Done').length;
+            const totalCount = ws.tasks.length;
+            const progress = totalCount ? Math.round((doneCount / totalCount) * 100) : 0;
+            const accent =
+              ws.signOffStatus === 'Signed Off'
+                ? 'success'
+                : overdueCount > 0
+                  ? 'risk'
+                  : progress >= 100
+                    ? 'success'
+                    : progress > 0
+                      ? 'link'
+                      : 'link';
+            const headerDot =
+              ws.signOffStatus === 'Signed Off'
+                ? 'done'
+                : overdueCount > 0
+                  ? 'blocked'
+                  : progress > 0
+                    ? 'in_progress'
+                    : 'todo';
+            const dateRange = [
+              fmtBoardDate(ws.actualStartDate || ws.baselinePlannedStartDate),
+              fmtBoardDate(ws.actualEndDate || ws.baselinePlannedEndDate),
+            ]
+              .filter(Boolean)
+              .join(' → ');
+
+            const subtitleNode = (
+              <span className="flex flex-wrap items-center gap-1.5">
+                {dateRange ? <span className="text-ink-500">{dateRange}</span> : null}
+                {ws.leadId?.name ? (
+                  <span
+                    className="bg-ink-100 text-ink-600 px-1.5 py-0.5 rounded-full text-[10px]"
+                    title={`Lead: ${ws.leadId.name}`}
+                  >
+                    @{ws.leadId.name.split(' ')[0]}
+                  </span>
+                ) : null}
+                {ws.signOffStatus === 'Signed Off' ? (
+                  <span className="bg-success-50 text-success-700 px-1.5 py-0.5 rounded-full text-[10px] font-medium">
+                    ✓ signed
+                  </span>
+                ) : ws.signOffStatus === 'Requested' ? (
+                  <span className="bg-caution-50 text-caution-700 px-1.5 py-0.5 rounded-full text-[10px] font-medium">
+                    sign-off requested
+                  </span>
+                ) : null}
+                {overdueCount > 0 ? (
+                  <span className="bg-risk-50 text-risk-700 px-1.5 py-0.5 rounded-full text-[10px] font-medium">
+                    ⚠ {overdueCount}
+                  </span>
+                ) : null}
+              </span>
+            );
+
+            const headerActions = (
+              <>
+                {canRequestSignOff(ws) && ws.signOffStatus === 'Pending' && (
+                  <button
+                    type="button"
+                    onClick={() => handleRequestSignOff(ws._id)}
+                    className="text-[10px] text-caution-700 hover:text-caution-900 px-1"
+                    title="Mark complete + request sign-off"
+                  >
+                    ⏵
+                  </button>
+                )}
+                {iAmPm && ws.signOffStatus === 'Requested' && (
+                  <button
+                    type="button"
+                    onClick={() => handleCompleteSignOff(ws._id)}
+                    className="text-[10px] text-success-700 hover:text-success-900 px-1"
+                    title="Approve sign-off"
+                  >
+                    ✓
+                  </button>
+                )}
+                {canDeleteWorkstream && (
+                  <button
+                    type="button"
+                    onClick={() => handleDeleteWorkstream(ws._id)}
+                    className="text-[11px] text-ink-300 hover:text-risk-500 px-1"
+                    title="Delete workstream"
+                  >
+                    ✕
+                  </button>
+                )}
+              </>
+            );
+
+            const footer = canCreateTask ? (
+              <button
+                type="button"
+                onClick={() => openAddTask(ws._id)}
+                disabled={module?.isBlocked}
+                className="w-full text-[11px] text-link-600 hover:text-link-700 hover:bg-link-50 rounded px-1.5 py-1 transition-colors disabled:text-ink-300 disabled:cursor-not-allowed text-left"
+              >
+                + Add task
+              </button>
+            ) : null;
+
+            return (
+              <KanbanColumn
+                key={ws._id}
+                icon={<StatusDot status={headerDot} />}
+                accent={accent}
+                title={ws.name}
+                subtitle={subtitleNode}
+                progress={progress}
+                progressTone={overdueCount > 0 ? 'risk' : progress >= 100 ? 'success' : 'link'}
+                actions={headerActions}
+                footer={footer}
+                emptyMessage="No tasks yet"
+              >
+                {ws.tasks.map((task) => {
+                  const overdue = isOverdue(task);
+                  const isSub = Boolean(task.parentTaskId);
+                  const flag = taskFlags[task._id];
+                  const cardAccent = overdue
+                    ? 'risk'
+                    : task.riskLevel === 'At Risk' || flag?.flag === 'at_risk'
+                      ? 'caution'
+                      : undefined;
+                  const dueLabel = task.dueDate
+                    ? new Date(task.dueDate).toLocaleDateString(undefined, {
+                        day: '2-digit',
+                        month: 'short',
+                      })
+                    : null;
+                  const ownerName =
+                    task.assignedTo && typeof task.assignedTo === 'object' && task.assignedTo.name
+                      ? task.assignedTo.name
+                      : task.owner;
+                  const initials = (ownerName || '?')
+                    .split(' ')
+                    .map((s) => s[0])
+                    .filter(Boolean)
+                    .slice(0, 2)
+                    .join('')
+                    .toUpperCase();
+
+                  const tags = [
+                    isSub ? (
+                      <span
+                        key="sub"
+                        className="text-[10px] bg-ink-50 text-ink-500 px-1.5 py-0.5 rounded"
+                      >
+                        subtask
+                      </span>
+                    ) : null,
+                    task.riskLevel === 'At Risk' ? (
+                      <span
+                        key="atrisk"
+                        className="text-[10px] bg-risk-50 text-risk-600 px-1.5 py-0.5 rounded font-medium"
+                      >
+                        at risk
+                      </span>
+                    ) : null,
+                    flag ? (
+                      <span
+                        key="flag"
+                        className="text-[10px] bg-caution-50 text-caution-700 px-1.5 py-0.5 rounded"
+                        title={flag.suggestion}
+                      >
+                        🚩 {flag.flag}
+                      </span>
+                    ) : null,
+                    !task.billable ? (
+                      <span
+                        key="nb"
+                        className="text-[10px] bg-ink-50 text-ink-500 px-1.5 py-0.5 rounded"
+                      >
+                        non-billable
+                      </span>
+                    ) : null,
+                  ].filter(Boolean);
+
+                  const cardActions = (
+                    <div className="flex items-center gap-1">
+                      {canCreateTask && !isSub && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openAddSubtask(ws._id, task);
+                          }}
+                          className="text-[10px] text-link-600 hover:text-link-800 px-1"
+                          title="Add subtask"
+                        >
+                          + sub
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          openLogHours(task);
+                        }}
+                        className="text-[10px] text-link-600 hover:text-link-800 px-1"
+                        title="Log hours"
+                      >
+                        +log
+                      </button>
+                      {(user?.role === 'admin' || user?.role === 'dh' || user?.role === 'pm') && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleDeleteTask(task._id);
+                          }}
+                          className="text-[10px] text-ink-300 hover:text-risk-500 px-1"
+                          title="Delete task"
+                        >
+                          ✕
+                        </button>
+                      )}
+                    </div>
+                  );
+
+                  const cardFooter = (
+                    <div className="flex items-center justify-between gap-2 text-[11px] text-ink-500">
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <span
+                          className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-link-100 text-link-700 text-[10px] font-semibold shrink-0"
+                          title={ownerName}
+                        >
+                          {initials}
+                        </span>
+                        <span className="truncate">{ownerName}</span>
+                      </div>
+                      <span className="font-medium text-ink-700 shrink-0">
+                        {task.loggedHours || 0}h
+                      </span>
+                    </div>
+                  );
+
+                  return (
+                    <KanbanCard
+                      key={task._id}
+                      leadingIcon={
+                        <StatusDot
+                          status={taskStatusDot(task.status)}
+                          size="sm"
+                          title={task.status}
+                          onClick={() => {
+                            // Cycle: Not Started → In Progress → Done → Not Started
+                            const next =
+                              task.status === 'Done'
+                                ? 'Not Started'
+                                : task.status === 'In Progress'
+                                  ? 'Done'
+                                  : 'In Progress';
+                            handleStatusChange(task._id, next);
+                          }}
+                        />
+                      }
+                      title={task.title}
+                      subtitle={
+                        dueLabel ? (
+                          <span
+                            className={`inline-flex items-center gap-1 text-[11px] ${
+                              overdue ? 'text-risk-600 font-medium' : 'text-ink-500'
+                            }`}
+                          >
+                            📅 {dueLabel}
+                            {overdue ? ' • overdue' : ''}
+                          </span>
+                        ) : null
+                      }
+                      tags={tags}
+                      footer={cardFooter}
+                      accent={cardAccent}
+                      actions={cardActions}
+                    />
+                  );
+                })}
+              </KanbanColumn>
+            );
+          })}
+        </KanbanBoard>
       ) : (
         <div className="space-y-4">
           {workstreams.map((ws) => {
